@@ -48,6 +48,7 @@
           <tr>
             <th>Chat ID</th>
             <th>Группа</th>
+            <th>Преподаватель</th>
             <th>Уведомления</th>
             <th>Первый запуск</th>
             <th>Активность</th>
@@ -62,6 +63,7 @@
                 {{ user.group_code || 'Без группы' }}
               </span>
             </td>
+            <td>{{ user.teacher_name || '—' }}</td>
             <td>
               <span :class="user.notifications_enabled ? 'ok' : 'muted'">
                 {{ user.notifications_enabled ? 'включены' : 'выключены' }}
@@ -77,7 +79,7 @@
             </td>
           </tr>
           <tr v-if="!loading && filteredUsers.length === 0">
-            <td colspan="6" class="empty">Пользователи не найдены</td>
+            <td colspan="7" class="empty">Пользователи не найдены</td>
           </tr>
         </tbody>
       </table>
@@ -101,7 +103,9 @@ const filteredUsers = computed(() => {
   const q = query.value.toLowerCase()
   if (!q) return users.value
   return users.value.filter((user) => {
-    return String(user.chat_id).includes(q) || String(user.group_code || '').toLowerCase().includes(q)
+    return String(user.chat_id).includes(q)
+      || String(user.group_code || '').toLowerCase().includes(q)
+      || String(user.teacher_name || '').toLowerCase().includes(q)
   })
 })
 

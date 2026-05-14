@@ -67,6 +67,7 @@ RATE_LIMIT_WINDOW = 60
 RATE_LIMIT_MAX = 5
 
 bot = Bot(TELEGRAM_BOT_TOKEN) if TELEGRAM_BOT_TOKEN else None
+init_db()
 
 
 def _rate_limit_login():

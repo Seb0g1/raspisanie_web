@@ -58,6 +58,7 @@ from storage import (
     get_lessons_by_teacher,
     get_subscriber_settings,
     set_subscriber_group,
+    set_subscriber_teacher,
     set_notifications_enabled,
     get_latest_groups,
     mark_update_processed,
@@ -132,29 +133,25 @@ def _next_school_day(d: date) -> date:
 
 
 def _schedule_date_keyboard() -> ReplyKeyboardMarkup:
-    """Клавиатура: Сегодня, Завтра/Понедельник (учебные дни)."""
     today = _today()
-    label_tomorrow = "Понедельник" if today.weekday() >= 4 else "Завтра"
+    label_tomorrow = "\u041f\u043e\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u0438\u043a" if today.weekday() >= 4 else "\u0417\u0430\u0432\u0442\u0440\u0430"
     keyboard = [
-        [KeyboardButton("📅 Сегодня"), KeyboardButton(f"🌅 {label_tomorrow}")],
-        [KeyboardButton("💬 Задать вопрос")],
+        [KeyboardButton("\U0001f4c5 \u0421\u0435\u0433\u043e\u0434\u043d\u044f"), KeyboardButton(f"\U0001f305 {label_tomorrow}")],
+        [KeyboardButton("\U0001f465 \u041c\u043e\u044f \u0433\u0440\u0443\u043f\u043f\u0430"), KeyboardButton("\U0001f464 \u041c\u043e\u0439 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c")],
+        [KeyboardButton("\U0001f4ac \u0417\u0430\u0434\u0430\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441"), KeyboardButton("\u2699\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438")],
     ]
-    keyboard.insert(1, [KeyboardButton("👥 Моя группа"), KeyboardButton("⚙️ Настройки")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-
 def _date_from_button(text: str) -> Optional[date]:
-    """По тексту кнопки вернуть дату расписания (или None)."""
     if not text:
         return None
     text = text.strip()
     today = _today()
-    if text == "📅 Сегодня" or text == "Сегодня":
+    if text in ("\U0001f4c5 \u0421\u0435\u0433\u043e\u0434\u043d\u044f", "\u0421\u0435\u0433\u043e\u0434\u043d\u044f"):
         return today
-    if text.startswith("🌅") or text in ("Завтра", "Понедельник"):
+    if text.startswith("\U0001f305") or text in ("\u0417\u0430\u0432\u0442\u0440\u0430", "\u041f\u043e\u043d\u0435\u0434\u0435\u043b\u044c\u043d\u0438\u043a"):
         return _next_school_day(today)
     return None
-
 
 def _parse_inline_query_to_dates(query: str) -> list:
     """По тексту инлайн-запроса вернуть список (date, label)."""
@@ -255,6 +252,19 @@ def _format_lessons_text(group_code: str, lessons: list) -> str:
     return "\n".join(lines)
 
 
+def _format_teacher_lessons_text(teacher_name: str, groups_lessons: list) -> str:
+    lines = [f"👤 {teacher_name}:"]
+    for group_code, lessons in groups_lessons:
+        lines.append(f"📋 {group_code}")
+        for les in lessons:
+            room_str = f" (каб. {les['room']})" if les.get("room") else ""
+            lines.append(
+                f"  {les['num']}. {les['time_start']}-{les['time_end']}{room_str}\n"
+                f"     {les['discipline']}"
+            )
+    return "\n".join(lines)
+
+
 def _format_group_options(limit: int = 24) -> str:
     groups = get_latest_groups()
     if not groups:
@@ -305,43 +315,94 @@ def _send_group_prompt(update: Update, context: CallbackContext) -> None:
     )
 
 
-def _send_settings(update: Update, context: CallbackContext) -> None:
-    settings = get_subscriber_settings(update.effective_chat.id)
-    group_code = settings.get("group_code") or "не выбрана"
-    notify = "включены" if settings.get("notifications_enabled", True) else "выключены"
+def _set_teacher_from_text(update: Update, context: CallbackContext, raw_teacher: str) -> None:
+    teacher_query = (raw_teacher or "").strip()
+    if not teacher_query:
+        update.message.reply_text("\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0444\u0430\u043c\u0438\u043b\u0438\u044e \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044f, \u043d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: \u0418\u0432\u0430\u043d\u043e\u0432")
+        return
+    if teacher_query.lower() in ("-", "\u043d\u0435\u0442", "\u0443\u0431\u0440\u0430\u0442\u044c", "\u0441\u0431\u0440\u043e\u0441"):
+        set_subscriber_teacher(update.effective_chat.id, None)
+        context.user_data.pop("awaiting_teacher", None)
+        update.message.reply_text(
+            "\u041f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c \u0443\u0431\u0440\u0430\u043d \u0438\u0437 \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a. \u041c\u043e\u0436\u043d\u043e \u0432\u044b\u0431\u0440\u0430\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443 \u0447\u0435\u0440\u0435\u0437 /group.",
+            reply_markup=_schedule_date_keyboard(),
+        )
+        return
+
+    teachers = find_teachers_by_name(teacher_query)
+    matched = teachers[0]["name"] if len(teachers) == 1 else teacher_query
+    set_subscriber_teacher(update.effective_chat.id, matched)
+    context.user_data.pop("awaiting_teacher", None)
     update.message.reply_text(
-        "⚙️ Настройки\n\n"
-        f"Группа: {group_code}\n"
-        f"Уведомления: {notify}\n\n"
-        "Команды:\n"
-        "/group — сменить группу\n"
-        "/notify_on — включить уведомления\n"
-        "/notify_off — выключить уведомления",
+        f"\u041f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d: {matched}\n\u0422\u0435\u043f\u0435\u0440\u044c \u043a\u043d\u043e\u043f\u043a\u0438 \u0421\u0435\u0433\u043e\u0434\u043d\u044f \u0438 \u0417\u0430\u0432\u0442\u0440\u0430 \u0431\u0443\u0434\u0443\u0442 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0442\u044c \u043b\u0438\u0447\u043d\u043e\u0435 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044f.",
         reply_markup=_schedule_date_keyboard(),
     )
 
 
+def _send_teacher_prompt(update: Update, context: CallbackContext) -> None:
+    settings = get_subscriber_settings(update.effective_chat.id)
+    current = settings.get("teacher_name") or "\u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d"
+    context.user_data["awaiting_teacher"] = True
+    update.message.reply_text(
+        f"\u0422\u0435\u043a\u0443\u0449\u0438\u0439 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c: {current}\n\n\u041d\u0430\u043f\u0438\u0448\u0438\u0442\u0435 \u0444\u0430\u043c\u0438\u043b\u0438\u044e \u0438\u043b\u0438 \u0424\u0418\u041e \u043e\u0434\u043d\u0438\u043c \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435\u043c. \u0427\u0442\u043e\u0431\u044b \u0443\u0431\u0440\u0430\u0442\u044c \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044f, \u043e\u0442\u043f\u0440\u0430\u0432\u044c\u0442\u0435: \u0441\u0431\u0440\u043e\u0441",
+        reply_markup=_schedule_date_keyboard(),
+    )
+
+def _send_settings(update: Update, context: CallbackContext) -> None:
+    settings = get_subscriber_settings(update.effective_chat.id)
+    group_code = settings.get("group_code") or "\u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u0430"
+    teacher_name = settings.get("teacher_name") or "\u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d"
+    notify = "\u0432\u043a\u043b\u044e\u0447\u0435\u043d\u044b" if settings.get("notifications_enabled", True) else "\u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d\u044b"
+    update.message.reply_text(
+        "\u2699\ufe0f \u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438\n\n"
+        f"\u0413\u0440\u0443\u043f\u043f\u0430: {group_code}\n"
+        f"\u041f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c: {teacher_name}\n"
+        f"\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f: {notify}\n\n"
+        "\u041a\u043e\u043c\u0430\u043d\u0434\u044b:\n"
+        "/group - \u0441\u043c\u0435\u043d\u0438\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443\n"
+        "/teacher - \u0441\u043c\u0435\u043d\u0438\u0442\u044c \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044f\n"
+        "/notify_on - \u0432\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f\n"
+        "/notify_off - \u0432\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0443\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f",
+        reply_markup=_schedule_date_keyboard(),
+    )
+
 def _send_user_schedule_for(update: Update, context: CallbackContext, target_date: date) -> None:
     settings = get_subscriber_settings(update.effective_chat.id)
+    teacher_name = settings.get("teacher_name")
+    if teacher_name:
+        result = get_lessons_by_teacher(target_date, teacher_name)
+        if result:
+            header = f"\U0001f4c5 {target_date.strftime('%d.%m.%Y')}\n"
+            update.message.reply_text(
+                header + _format_teacher_lessons_text(teacher_name, result),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("\u041f\u043e\u043b\u043d\u044b\u0439 PDF", callback_data=f"schedule_{target_date.isoformat()}")
+                ]]),
+            )
+            return
+        update.message.reply_text(
+            f"\u041d\u0435 \u043d\u0430\u0448\u0435\u043b \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044f {teacher_name} \u0432 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0438 \u043d\u0430 {target_date.strftime('%d.%m.%Y')}.\n"
+            "\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e, \u0444\u0430\u043c\u0438\u043b\u0438\u044f \u0432 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0438 \u043d\u0430\u043f\u0438\u0441\u0430\u043d\u0430 \u0438\u043d\u0430\u0447\u0435. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 /teacher, \u0447\u0442\u043e\u0431\u044b \u0441\u043c\u0435\u043d\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0443."
+        )
+
     group_code = settings.get("group_code")
     if group_code:
         result = get_lessons_by_group(target_date, group_code)
         if result:
             actual_group, lessons = result
-            header = f"📅 {target_date.strftime('%d.%m.%Y')}\n"
+            header = f"\U0001f4c5 {target_date.strftime('%d.%m.%Y')}\n"
             update.message.reply_text(
                 header + _format_lessons_text(actual_group, lessons),
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Полный PDF", callback_data=f"schedule_{target_date.isoformat()}")
+                    InlineKeyboardButton("\u041f\u043e\u043b\u043d\u044b\u0439 PDF", callback_data=f"schedule_{target_date.isoformat()}")
                 ]]),
             )
             return
         update.message.reply_text(
-            f"Не нашел группу {group_code} в расписании на {target_date.strftime('%d.%m.%Y')}.\n"
-            "Возможно, группа переименована. Нажмите «Моя группа» или используйте /group, чтобы сменить ее."
+            f"\u041d\u0435 \u043d\u0430\u0448\u0435\u043b \u0433\u0440\u0443\u043f\u043f\u0443 {group_code} \u0432 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0438 \u043d\u0430 {target_date.strftime('%d.%m.%Y')}.\n"
+            "\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e, \u0433\u0440\u0443\u043f\u043f\u0430 \u043f\u0435\u0440\u0435\u0438\u043c\u0435\u043d\u043e\u0432\u0430\u043d\u0430. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 \u041c\u043e\u044f \u0433\u0440\u0443\u043f\u043f\u0430 \u0438\u043b\u0438 \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 /group, \u0447\u0442\u043e\u0431\u044b \u0441\u043c\u0435\u043d\u0438\u0442\u044c \u0435\u0435."
         )
     _send_schedule_for(update, context, target_date)
-
 
 def _send_schedule_for(update: Update, context: CallbackContext, target_date: date) -> None:
     file_path = get_schedule(target_date)
@@ -459,6 +520,17 @@ def group_command(update: Update, context: CallbackContext) -> None:
         _set_group_from_text(update, context, " ".join(context.args))
         return
     _send_group_prompt(update, context)
+
+
+def teacher_command(update: Update, context: CallbackContext) -> None:
+    if not _require_channel(update, context):
+        return
+    add_subscriber(update.effective_chat.id)
+    update_subscriber_activity(update.effective_chat.id)
+    if context.args:
+        _set_teacher_from_text(update, context, " ".join(context.args))
+        return
+    _send_teacher_prompt(update, context)
 
 
 def settings_command(update: Update, context: CallbackContext) -> None:
@@ -678,15 +750,22 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
         _set_group_from_text(update, context, text)
         return
 
-    if "моя группа" in text_lower:
+    if context.user_data.get("awaiting_teacher"):
+        _set_teacher_from_text(update, context, text)
+        return
+
+    if "\u043c\u043e\u044f \u0433\u0440\u0443\u043f\u043f\u0430" in text_lower:
         _send_group_prompt(update, context)
         return
 
-    if "настройки" in text_lower:
+    if "\u043c\u043e\u0439 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c" in text_lower:
+        _send_teacher_prompt(update, context)
+        return
+
+    if "\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438" in text_lower:
         _send_settings(update, context)
         return
 
-    # Пользователь в режиме «пишет вопрос» — сохраняем как обращение и уведомляем админов
     if context.user_data.get("awaiting_question"):
         context.user_data.pop("awaiting_question", None)
         if not text:
@@ -1001,6 +1080,7 @@ def main() -> None:
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("group", group_command))
+    dp.add_handler(CommandHandler("teacher", teacher_command))
     dp.add_handler(CommandHandler("settings", settings_command))
     dp.add_handler(CommandHandler("notify_on", notify_on_command))
     dp.add_handler(CommandHandler("notify_off", notify_off_command))

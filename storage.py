@@ -65,6 +65,7 @@ def init_db() -> None:
             pass
         for sql in (
             "ALTER TABLE subscribers ADD COLUMN group_code TEXT",
+            "ALTER TABLE subscribers ADD COLUMN teacher_name TEXT",
             "ALTER TABLE subscribers ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1",
             "ALTER TABLE subscribers ADD COLUMN group_missing_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE subscribers ADD COLUMN settings_updated_at DATETIME",
@@ -256,7 +257,7 @@ def get_subscribers_with_settings() -> List[dict]:
     with _get_conn() as conn:
         rows = conn.cursor().execute(
             """
-            SELECT chat_id, group_code, notifications_enabled, group_missing_count
+            SELECT chat_id, group_code, teacher_name, notifications_enabled, group_missing_count
             FROM subscribers
             """
         ).fetchall()
@@ -264,6 +265,7 @@ def get_subscribers_with_settings() -> List[dict]:
             {
                 "chat_id": int(row["chat_id"]),
                 "group_code": row["group_code"],
+                "teacher_name": row["teacher_name"],
                 "notifications_enabled": bool(row["notifications_enabled"]),
                 "group_missing_count": int(row["group_missing_count"] or 0),
             }
@@ -275,7 +277,7 @@ def get_subscriber_settings(chat_id: int) -> dict:
     with _get_conn() as conn:
         row = conn.cursor().execute(
             """
-            SELECT chat_id, group_code, notifications_enabled, group_missing_count
+            SELECT chat_id, group_code, teacher_name, notifications_enabled, group_missing_count
             FROM subscribers WHERE chat_id = ?
             """,
             (chat_id,),
@@ -284,12 +286,14 @@ def get_subscriber_settings(chat_id: int) -> dict:
             return {
                 "chat_id": chat_id,
                 "group_code": None,
+                "teacher_name": None,
                 "notifications_enabled": True,
                 "group_missing_count": 0,
             }
         return {
             "chat_id": int(row["chat_id"]),
             "group_code": row["group_code"],
+            "teacher_name": row["teacher_name"],
             "notifications_enabled": bool(row["notifications_enabled"]),
             "group_missing_count": int(row["group_missing_count"] or 0),
         }
@@ -309,7 +313,7 @@ def set_subscriber_group(chat_id: int, group_code: Optional[str]) -> None:
         cur.execute(
             """
             UPDATE subscribers
-            SET group_code = ?, group_missing_count = 0, settings_updated_at = ?
+            SET group_code = ?, teacher_name = NULL, group_missing_count = 0, settings_updated_at = ?
             WHERE chat_id = ?
             """,
             (new_group, now, chat_id),
@@ -323,6 +327,21 @@ def set_subscriber_group(chat_id: int, group_code: Optional[str]) -> None:
                 """,
                 (chat_id, old_group, new_group, now),
             )
+
+
+def set_subscriber_teacher(chat_id: int, teacher_name: Optional[str]) -> None:
+    add_subscriber(chat_id)
+    name = teacher_name.strip() if teacher_name and teacher_name.strip() else None
+    now = datetime.utcnow().isoformat()
+    with _get_conn() as conn:
+        conn.cursor().execute(
+            """
+            UPDATE subscribers
+            SET teacher_name = ?, group_code = NULL, group_missing_count = 0, settings_updated_at = ?
+            WHERE chat_id = ?
+            """,
+            (name, now, chat_id),
+        )
 
 
 def set_notifications_enabled(chat_id: int, enabled: bool) -> None:
@@ -679,7 +698,7 @@ def list_subscribers(limit: int = 500, offset: int = 0, group_code: Optional[str
     with _get_conn() as conn:
         rows = conn.cursor().execute(
             f"""
-            SELECT chat_id, first_seen, last_activity, group_code, notifications_enabled,
+            SELECT chat_id, first_seen, last_activity, group_code, teacher_name, notifications_enabled,
                    group_missing_count, settings_updated_at
             FROM subscribers
             {where}
@@ -694,6 +713,7 @@ def list_subscribers(limit: int = 500, offset: int = 0, group_code: Optional[str
                 "first_seen": row["first_seen"],
                 "last_activity": row["last_activity"],
                 "group_code": row["group_code"],
+                "teacher_name": row["teacher_name"],
                 "notifications_enabled": bool(row["notifications_enabled"]),
                 "group_missing_count": int(row["group_missing_count"] or 0),
                 "settings_updated_at": row["settings_updated_at"],

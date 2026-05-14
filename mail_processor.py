@@ -41,6 +41,7 @@ from storage import (
     is_email_processed,
     mark_email_processed,
     get_lessons_by_group,
+    get_lessons_by_teacher,
     was_schedule_notification_sent,
     mark_schedule_notification_sent,
     bump_group_missing_count,
@@ -583,16 +584,43 @@ def convert_uploaded_word(word_bytes: bytes, original_filename: str, schedule_da
             pass
 
 
+def _format_teacher_notification(schedule_date: date, teacher_name: str, groups_lessons: list) -> str:
+    lines = [f"📅 {schedule_date.strftime('%d.%m.%Y')}", f"👤 {teacher_name}:"]
+    for group_code, lessons in groups_lessons:
+        lines.append(f"📋 {group_code}")
+        for les in lessons:
+            room = f" (каб. {les['room']})" if les.get("room") else ""
+            lines.append(
+                f"{les['num']}. {les['time_start']}-{les['time_end']}{room}\n"
+                f"{les['discipline']}"
+            )
+    return "\n\n".join(lines)
+
+
 def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, caption: str) -> None:
     kind_base = "updated" if "ИЗМЕНЕНИЕ" in caption else "new"
     for item in get_subscribers_with_settings():
         chat_id = item["chat_id"]
         if not item.get("notifications_enabled", True):
             continue
-        kind = f"{kind_base}:personal" if item.get("group_code") else f"{kind_base}:pdf"
+        kind = f"{kind_base}:personal" if (item.get("teacher_name") or item.get("group_code")) else f"{kind_base}:pdf"
         if was_schedule_notification_sent(chat_id, schedule_date, kind):
             continue
         try:
+            teacher_name = item.get("teacher_name")
+            if teacher_name:
+                result = get_lessons_by_teacher(schedule_date, teacher_name)
+                if result:
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text=_format_teacher_notification(schedule_date, teacher_name, result),
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("Полный PDF", callback_data=f"schedule_{schedule_date.isoformat()}")
+                        ]]),
+                    )
+                    mark_schedule_notification_sent(chat_id, schedule_date, kind)
+                    continue
+
             group_code = item.get("group_code")
             if group_code:
                 result = get_lessons_by_group(schedule_date, group_code)
