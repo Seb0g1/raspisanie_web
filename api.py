@@ -391,18 +391,9 @@ def api_upload_schedule():
     notify = (request.form.get("notify") or "").strip().lower() in ("1", "true", "yes", "on")
     notified = 0
     if notify and bot:
-        text = f"📅 НОВОЕ РАСПИСАНИЕ!\nДоступно расписание на {schedule_date.strftime('%d.%m.%Y')}"
-        subscribers = get_subscribers()
-        for chat_id in subscribers:
-            try:
-                bot.send_message(chat_id=chat_id, text=text)
-                with open(pdf_path, "rb") as pf:
-                    bot.send_document(chat_id=chat_id, document=pf)
-                notified += 1
-            except Exception as e:
-                err_msg = str(e).lower()
-                if "blocked" in err_msg or "deactivated" in err_msg:
-                    remove_subscriber(chat_id)
+        from mail_processor import notify_new_schedule
+        notify_new_schedule(bot, schedule_date, pdf_path)
+        notified = len(get_subscribers())
 
     return jsonify({
         "ok": True,

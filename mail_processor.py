@@ -515,40 +515,37 @@ def convert_uploaded_word(word_bytes: bytes, original_filename: str, schedule_da
             pass
 
 
+def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, caption: str) -> None:
+    subscribers = get_subscribers()
+    for chat_id in subscribers:
+        try:
+            with open(pdf_path, "rb") as f:
+                bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename=f"Расписание_{schedule_date.isoformat()}.pdf",
+                    caption=caption,
+                )
+        except Exception as e:
+            logger.warning("Notify error for chat %s: %s", chat_id, e)
+            err_msg = str(e).lower()
+            if "blocked" in err_msg or "deactivated" in err_msg or "kicked" in err_msg:
+                remove_subscriber(chat_id)
+                logger.info("Removed inactive subscriber %s", chat_id)
+
+
 def notify_new_schedule(bot: Bot, schedule_date: date, pdf_path: str) -> None:
-    text = (
+    caption = (
         f"📅 НОВОЕ РАСПИСАНИЕ!\n"
         f"Доступно расписание на {schedule_date.strftime('%d.%m.%Y')}"
     )
-    subscribers = get_subscribers()
-    for chat_id in subscribers:
-        try:
-            bot.send_message(chat_id=chat_id, text=text)
-            with open(pdf_path, "rb") as f:
-                bot.send_document(chat_id=chat_id, document=f)
-        except Exception as e:
-            logger.warning("Notify error for chat %s: %s", chat_id, e)
-            err_msg = str(e).lower()
-            if "blocked" in err_msg or "deactivated" in err_msg or "kicked" in err_msg:
-                remove_subscriber(chat_id)
-                logger.info("Removed inactive subscriber %s", chat_id)
+    _notify_schedule_document(bot, schedule_date, pdf_path, caption)
 
 
 def notify_updated_schedule(bot: Bot, schedule_date: date, pdf_path: str) -> None:
-    text = (
+    caption = (
         f"🔄 ИЗМЕНЕНИЕ В РАСПИСАНИИ!\n"
         f"Обновлено расписание на {schedule_date.strftime('%d.%m.%Y')}"
     )
-    subscribers = get_subscribers()
-    for chat_id in subscribers:
-        try:
-            bot.send_message(chat_id=chat_id, text=text)
-            with open(pdf_path, "rb") as f:
-                bot.send_document(chat_id=chat_id, document=f)
-        except Exception as e:
-            logger.warning("Notify error for chat %s: %s", chat_id, e)
-            err_msg = str(e).lower()
-            if "blocked" in err_msg or "deactivated" in err_msg or "kicked" in err_msg:
-                remove_subscriber(chat_id)
-                logger.info("Removed inactive subscriber %s", chat_id)
+    _notify_schedule_document(bot, schedule_date, pdf_path, caption)
 
