@@ -1,0 +1,50 @@
+# Nginx: панель бота и раздача PDF для инлайна.
+# Порт 5000 занят? В .env задайте WEB_PORT=5001 и укажите его в proxy_pass.
+#
+# Установка:
+#   sudo cp nginx_bot_rasp.conf.example /etc/nginx/sites-available/bot_rasp
+#   sudo ln -sf /etc/nginx/sites-available/bot_rasp /etc/nginx/sites-enabled/
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Для инлайн-PDF нужен HTTPS. Вариант: поддомен sebog1.ru → bot.sebog1.ru
+# 1) В DNS добавьте A-запись: bot.sebog1.ru → IP сервера (81.17.154.153)
+# 2) sudo certbot --nginx -d bot.sebog1.ru
+# 3) В .env: PUBLIC_BASE_URL=https://bot.sebog1.ru
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 81.17.154.153;
+
+    location / {
+        proxy_pass http://127.0.0.1:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# Поддомен для HTTPS (инлайн отправляет PDF в чат). Раскомментируйте после настройки DNS.
+# server {
+#     listen 80;
+#     listen [::]:80;
+#     server_name bot.sebog1.ru;
+#     return 301 https://$host$request_uri;
+# }
+# server {
+#     listen 443 ssl http2;
+#     listen [::]:443 ssl http2;
+#     server_name bot.sebog1.ru;
+#
+#     ssl_certificate     /etc/letsencrypt/live/bot.sebog1.ru/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/bot.sebog1.ru/privkey.pem;
+#
+#     location / {
+#         proxy_pass http://127.0.0.1:5001;
+#         proxy_set_header Host $host;
+#         proxy_set_header X-Real-IP $remote_addr;
+#         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#         proxy_set_header X-Forwarded-Proto $scheme;
+#     }
+# }

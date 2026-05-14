@@ -1,0 +1,16 @@
+[Unit]
+Description=Telegram Bot Raspisanie (bot)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/bot_rasp
+EnvironmentFile=/home/bot_rasp/.env
+ExecStart=/home/bot_rasp/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
