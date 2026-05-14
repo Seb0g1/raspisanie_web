@@ -366,6 +366,7 @@ def process_mail(bot: Bot) -> None:
             schedule_date = _extract_schedule_date_from_subject(subject, email_date)
 
             attachments_found = False
+            processing_failed = False
             for filename, part, attachment_type in _iter_schedule_attachments(msg):
                 attachments_found = True
                 try:
@@ -403,6 +404,7 @@ def process_mail(bot: Bot) -> None:
                     )
 
                 except Exception as e:
+                    processing_failed = True
                     logger.warning("Error processing attachment %s: %s", filename, e)
                     _alert_admins(
                         bot,
@@ -417,6 +419,10 @@ def process_mail(bot: Bot) -> None:
                         subject=subject,
                         schedule_date=schedule_date,
                     )
+            if processing_failed:
+                logger.info("Email %s is not marked as processed because attachment processing failed", email_message_id)
+                continue
+
             mark_email_processed(email_message_id)
             if not attachments_found:
                 logger.info("No schedule attachments in email %s, marked as processed", email_message_id)
