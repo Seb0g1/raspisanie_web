@@ -4,17 +4,16 @@
 
     <div v-if="message" class="message" :class="messageClass">{{ message }}</div>
 
-    <!-- Сканер почты -->
-    <div class="card">
+    <section class="card">
       <div class="card__header">
         <h2 class="section-title">Входящие письма</h2>
         <button class="btn btn--secondary" :disabled="scanLoading" @click="scanMail">
-          {{ scanLoading ? 'Сканирование…' : 'Сканировать почту' }}
+          {{ scanLoading ? 'Сканирование...' : 'Сканировать почту' }}
         </button>
       </div>
 
       <div v-if="emails.length === 0 && !scanLoading" class="empty">
-        Нажмите «Сканировать почту» для проверки входящих писем
+        Нажмите «Сканировать почту», чтобы проверить входящие письма.
       </div>
 
       <div v-for="email in emails" :key="email.msg_id" class="email-item">
@@ -23,7 +22,7 @@
           <span v-if="email.already_loaded" class="badge badge--loaded">Загружено</span>
           <span v-else-if="email.has_word" class="badge badge--word">Word</span>
         </div>
-        <div class="email-subject">{{ email.subject }}</div>
+        <div class="email-subject">{{ email.subject || 'Без темы' }}</div>
         <div class="email-meta">
           <span>От: {{ email.sender }}</span>
           <span>Дата расписания: <strong>{{ email.schedule_date_formatted }}</strong></span>
@@ -40,7 +39,7 @@
             :disabled="processingId === email.msg_id"
             @click="processEmail(email)"
           >
-            {{ processingId === email.msg_id ? 'Обработка…' : (email.already_loaded ? 'Обновить' : 'Конвертировать и загрузить') }}
+            {{ processingId === email.msg_id ? 'Обработка...' : (email.already_loaded ? 'Обновить' : 'Конвертировать и загрузить') }}
           </button>
           <label v-if="email.has_word" class="checkbox-label-small">
             <input type="checkbox" v-model="email._notify" />
@@ -48,12 +47,38 @@
           </label>
         </div>
       </div>
-    </div>
+    </section>
 
-    <!-- Ручная загрузка -->
-    <div class="card">
+    <section class="card">
+      <div class="card__header">
+        <h2 class="section-title">Журнал обработки</h2>
+        <button class="btn btn--secondary" :disabled="eventsLoading" @click="loadEvents">
+          {{ eventsLoading ? 'Обновление...' : 'Обновить' }}
+        </button>
+      </div>
+
+      <div v-if="mailEvents.length === 0 && !eventsLoading" class="empty">
+        Событий пока нет.
+      </div>
+
+      <div v-for="event in mailEvents" :key="event.id" class="event-item" :class="'event-item--' + event.level">
+        <div class="event-header">
+          <span class="badge" :class="'badge--' + event.level">{{ event.level }}</span>
+          <span class="event-type">{{ event.event_type }}</span>
+          <span class="email-date">{{ formatEventDate(event.created_at) }}</span>
+        </div>
+        <div v-if="event.subject" class="email-subject">{{ event.subject }}</div>
+        <div class="email-meta">
+          <span v-if="event.schedule_date">Дата: {{ event.schedule_date }}</span>
+          <span v-if="event.message_id">ID: {{ event.message_id }}</span>
+        </div>
+        <div class="event-detail">{{ event.detail }}</div>
+      </div>
+    </section>
+
+    <section class="card">
       <h2 class="section-title">Загрузить вручную</h2>
-      <p class="hint">PDF или Word файл (.doc, .docx) — Word автоматически конвертируется в PDF</p>
+      <p class="hint">PDF или Word-файл (.doc, .docx). Word автоматически конвертируется в PDF.</p>
       <form @submit.prevent="submit" class="form">
         <label class="label">Дата расписания</label>
         <input v-model="dateStr" type="date" class="input" required />
@@ -84,13 +109,12 @@
         </label>
 
         <button type="submit" class="btn btn--primary" :disabled="uploadLoading">
-          {{ uploadLoading ? 'Загрузка…' : 'Загрузить' }}
+          {{ uploadLoading ? 'Загрузка...' : 'Загрузить' }}
         </button>
       </form>
-    </div>
+    </section>
 
-    <!-- Архив -->
-    <div class="card">
+    <section class="card">
       <h2 class="section-title">Архив расписаний</h2>
       <div v-if="schedules.length === 0" class="empty">Архив пуст</div>
       <div v-else class="schedule-list">
@@ -104,7 +128,7 @@
           {{ s.date_formatted }}
         </a>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -115,19 +139,19 @@ import { api } from '../api'
 const message = ref('')
 const messageClass = ref('')
 
-// Сканер почты
 const scanLoading = ref(false)
 const emails = ref([])
 const processingId = ref(null)
 
-// Загрузка вручную
+const eventsLoading = ref(false)
+const mailEvents = ref([])
+
 const dateStr = ref('')
 const file = ref(null)
 const notify = ref(false)
 const uploadLoading = ref(false)
 const dragOver = ref(false)
 
-// Архив
 const schedules = ref([])
 
 function showMessage(text, type = 'success') {
@@ -136,19 +160,21 @@ function showMessage(text, type = 'success') {
   setTimeout(() => { message.value = '' }, 8000)
 }
 
+function formatEventDate(value) {
+  if (!value) return ''
+  return value.replace('T', ' ').slice(0, 19)
+}
+
 async function scanMail() {
   scanLoading.value = true
   message.value = ''
   try {
     const data = await api.mailScan()
     emails.value = (data.items || []).map(e => ({ ...e, _notify: false }))
-    if (emails.value.length === 0) {
-      showMessage('Писем не найдено (за последние 30 дней)')
-    } else {
-      showMessage(`Найдено ${emails.value.length} писем`)
-    }
+    showMessage(emails.value.length ? `Найдено писем: ${emails.value.length}` : 'Писем не найдено')
+    await loadEvents()
   } catch (e) {
-    showMessage(e.message || 'Ошибка сканирования', 'error')
+    showMessage(e.message || 'Ошибка сканирования почты', 'error')
   } finally {
     scanLoading.value = false
   }
@@ -161,8 +187,10 @@ async function processEmail(email) {
     email.already_loaded = true
     showMessage(`Расписание на ${res.schedule_date} загружено (${res.processed} файл(ов))`)
     await loadSchedules()
+    await loadEvents()
   } catch (e) {
-    showMessage(e.message || 'Ошибка обработки', 'error')
+    showMessage(e.message || 'Ошибка обработки письма', 'error')
+    await loadEvents()
   } finally {
     processingId.value = null
   }
@@ -174,8 +202,8 @@ function onFileChange(e) {
 
 function onDrop(e) {
   dragOver.value = false
-  const f = e.dataTransfer.files[0]
-  if (f) file.value = f
+  const dropped = e.dataTransfer.files[0]
+  if (dropped) file.value = dropped
 }
 
 async function loadSchedules() {
@@ -183,6 +211,17 @@ async function loadSchedules() {
     const data = await api.schedules()
     schedules.value = data.items || []
   } catch (_) {}
+}
+
+async function loadEvents() {
+  eventsLoading.value = true
+  try {
+    const data = await api.mailEvents()
+    mailEvents.value = data.items || []
+  } catch (_) {
+  } finally {
+    eventsLoading.value = false
+  }
 }
 
 async function submit() {
@@ -198,22 +237,27 @@ async function submit() {
     if (notify.value) fd.append('notify', 'true')
     const res = await api.uploadSchedule(fd)
     const parts = [`Расписание на ${res.date} загружено`]
-    if (res.converted_from_word) parts.push('(Word → PDF)')
-    if (res.parsed_groups) parts.push(`${res.parsed_groups} групп распознано`)
+    if (res.converted_from_word) parts.push('Word -> PDF')
+    if (res.parsed_groups) parts.push(`групп распознано: ${res.parsed_groups}`)
     if (res.notified) parts.push(`уведомлено: ${res.notified}`)
     showMessage(parts.join(' · '))
     file.value = null
     dateStr.value = ''
     notify.value = false
     await loadSchedules()
+    await loadEvents()
   } catch (e) {
     showMessage(e.message || 'Ошибка загрузки', 'error')
+    await loadEvents()
   } finally {
     uploadLoading.value = false
   }
 }
 
-onMounted(loadSchedules)
+onMounted(() => {
+  loadSchedules()
+  loadEvents()
+})
 </script>
 
 <style scoped>
@@ -225,7 +269,7 @@ onMounted(loadSchedules)
   border-radius: var(--radius);
   padding: 1.25rem;
 }
-.card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.card__header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .section-title { font-family: var(--font-sans); font-size: 1.1rem; font-weight: 600; margin-bottom: 0.75rem; }
 .card__header .section-title { margin-bottom: 0; }
 .hint { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem; }
@@ -237,13 +281,13 @@ onMounted(loadSchedules)
   color: var(--text); outline: none;
 }
 .input:focus { border-color: var(--accent); }
-
-/* Письма */
-.email-item {
+.email-item, .event-item {
   border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem;
   margin-bottom: 0.5rem; background: var(--bg-input);
 }
-.email-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
+.event-item--error { border-color: rgba(255,71,87,0.5); }
+.event-item--warning { border-color: rgba(255,193,7,0.5); }
+.email-header, .event-header { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.25rem; }
 .email-date { font-size: 0.8rem; color: var(--text-muted); }
 .email-subject { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
 .email-meta { font-size: 0.8rem; color: var(--text-muted); display: flex; gap: 1rem; flex-wrap: wrap; }
@@ -253,13 +297,16 @@ onMounted(loadSchedules)
   border: 1px solid rgba(0,212,170,0.3); border-radius: 4px; color: var(--accent);
 }
 .email-actions { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.5rem; }
+.event-type { font-weight: 600; }
+.event-detail { color: var(--text-muted); font-size: 0.85rem; white-space: pre-wrap; margin-top: 0.35rem; }
 .badge {
   font-size: 0.7rem; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 600;
+  background: rgba(255,255,255,0.08); color: var(--text-muted);
 }
-.badge--loaded { background: rgba(0,212,170,0.2); color: var(--accent); }
+.badge--loaded, .badge--info { background: rgba(0,212,170,0.2); color: var(--accent); }
 .badge--word { background: rgba(66,133,244,0.2); color: #4285f4; }
-
-/* Drop zone */
+.badge--warning { background: rgba(255,193,7,0.18); color: #ffc107; }
+.badge--error { background: rgba(255,71,87,0.18); color: var(--danger); }
 .drop-zone {
   border: 2px dashed var(--border); border-radius: 8px; padding: 2rem;
   text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s;
@@ -267,19 +314,12 @@ onMounted(loadSchedules)
 }
 .drop-zone:hover, .drop-zone--active { border-color: var(--accent); background: rgba(0,212,170,0.05); }
 .drop-zone__hint { opacity: 0.7; }
-
-/* Чекбоксы */
-.checkbox-label {
-  display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;
-  color: var(--text); cursor: pointer;
+.checkbox-label, .checkbox-label-small {
+  display: flex; align-items: center; gap: 0.5rem; color: var(--text); cursor: pointer;
 }
-.checkbox-label-small {
-  display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem;
-  color: var(--text-muted); cursor: pointer;
-}
+.checkbox-label { font-size: 0.9rem; }
+.checkbox-label-small { font-size: 0.8rem; color: var(--text-muted); }
 .checkbox { width: 1rem; height: 1rem; accent-color: var(--accent); }
-
-/* Кнопки */
 .btn {
   font-family: var(--font-mono); font-size: 0.9rem; padding: 0.6rem 1rem;
   border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
@@ -289,15 +329,10 @@ onMounted(loadSchedules)
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .btn--primary { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 600; }
 .btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
-.btn--secondary { }
 .btn--small { font-size: 0.8rem; padding: 0.4rem 0.75rem; }
-
-/* Сообщения */
 .message { padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.9rem; }
 .message--error { background: rgba(255,71,87,0.15); color: var(--danger); }
 .message--success { background: rgba(0,212,170,0.15); color: var(--accent); }
-
-/* Архив */
 .empty { color: var(--text-muted); font-size: 0.9rem; }
 .schedule-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .schedule-item {
