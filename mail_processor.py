@@ -31,7 +31,20 @@ from config import (
     INCOMING_DIR,
     ARCHIVE_DIR,
 )
-from storage import save_schedule, get_schedule, get_subscribers, save_parsed_lessons, remove_subscriber, is_email_processed, mark_email_processed
+from storage import (
+    save_schedule,
+    get_schedule,
+    get_subscribers_with_settings,
+    save_parsed_lessons,
+    remove_subscriber,
+    is_email_processed,
+    mark_email_processed,
+    get_lessons_by_group,
+    was_schedule_notification_sent,
+    mark_schedule_notification_sent,
+    bump_group_missing_count,
+    reset_group_missing_count,
+)
 
 
 def _decode_header(value: str) -> str:
@@ -516,9 +529,43 @@ def convert_uploaded_word(word_bytes: bytes, original_filename: str, schedule_da
 
 
 def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, caption: str) -> None:
-    subscribers = get_subscribers()
-    for chat_id in subscribers:
+    kind_base = "updated" if "ИЗМЕНЕНИЕ" in caption else "new"
+    for item in get_subscribers_with_settings():
+        chat_id = item["chat_id"]
+        if not item.get("notifications_enabled", True):
+            continue
+        kind = f"{kind_base}:personal" if item.get("group_code") else f"{kind_base}:pdf"
+        if was_schedule_notification_sent(chat_id, schedule_date, kind):
+            continue
         try:
+            group_code = item.get("group_code")
+            if group_code:
+                result = get_lessons_by_group(schedule_date, group_code)
+                if result:
+                    actual_group, lessons = result
+                    reset_group_missing_count(chat_id)
+                    lines = [f"📅 {schedule_date.strftime('%d.%m.%Y')}", f"📋 {actual_group}:"]
+                    for les in lessons:
+                        room = f" (каб. {les['room']})" if les.get("room") else ""
+                        lines.append(
+                            f"{les['num']}. {les['time_start']}-{les['time_end']}{room}\n"
+                            f"{les['discipline']}\n"
+                            f"{les['teacher']}"
+                        )
+                    bot.send_message(chat_id=chat_id, text="\n\n".join(lines))
+                    mark_schedule_notification_sent(chat_id, schedule_date, kind)
+                    continue
+
+                missing_count = bump_group_missing_count(chat_id)
+                if missing_count >= 2:
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"Не нашел вашу группу {group_code} в новом расписании.\n"
+                            "Возможно, группа переименована. Используйте /group, чтобы выбрать новую."
+                        ),
+                    )
+
             with open(pdf_path, "rb") as f:
                 bot.send_document(
                     chat_id=chat_id,
@@ -526,6 +573,7 @@ def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, capt
                     filename=f"Расписание_{schedule_date.isoformat()}.pdf",
                     caption=caption,
                 )
+            mark_schedule_notification_sent(chat_id, schedule_date, kind)
         except Exception as e:
             logger.warning("Notify error for chat %s: %s", chat_id, e)
             err_msg = str(e).lower()

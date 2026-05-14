@@ -56,6 +56,11 @@ from storage import (
     remove_subscriber,
     get_lessons_by_group,
     get_lessons_by_teacher,
+    get_subscriber_settings,
+    set_subscriber_group,
+    set_notifications_enabled,
+    get_latest_groups,
+    mark_update_processed,
 )
 from mail_processor import process_mail
 
@@ -68,6 +73,7 @@ logger = logging.getLogger(__name__)
 _RECENT_MESSAGES = OrderedDict()
 _RECENT_MESSAGES_TTL = 120
 _RECENT_MESSAGES_LIMIT = 1000
+_LOCK_FH = None
 
 
 def _today() -> date:
@@ -91,11 +97,30 @@ def _is_duplicate_message(update: Update) -> bool:
     if key in _RECENT_MESSAGES:
         logger.info("Skip duplicate message chat_id=%s message_id=%s", chat.id, message.message_id)
         return True
+    if not mark_update_processed(chat.id, message.message_id):
+        logger.info("Skip persisted duplicate message chat_id=%s message_id=%s", chat.id, message.message_id)
+        return True
 
     _RECENT_MESSAGES[key] = now
     if len(_RECENT_MESSAGES) > _RECENT_MESSAGES_LIMIT:
         _RECENT_MESSAGES.popitem(last=False)
     return False
+
+
+def _acquire_single_instance_lock() -> None:
+    global _LOCK_FH
+    if os.name == "nt":
+        return
+    import fcntl
+
+    lock_path = os.getenv("BOT_LOCK_FILE", "/tmp/bot_rasp.lock")
+    _LOCK_FH = open(lock_path, "w")
+    try:
+        fcntl.flock(_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise RuntimeError(f"Another bot instance is already running (lock: {lock_path})")
+    _LOCK_FH.write(str(os.getpid()))
+    _LOCK_FH.flush()
 
 
 def _next_school_day(d: date) -> date:
@@ -114,6 +139,7 @@ def _schedule_date_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton("📅 Сегодня"), KeyboardButton(f"🌅 {label_tomorrow}")],
         [KeyboardButton("💬 Задать вопрос")],
     ]
+    keyboard.insert(1, [KeyboardButton("👥 Моя группа"), KeyboardButton("⚙️ Настройки")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 
@@ -229,6 +255,89 @@ def _format_lessons_text(group_code: str, lessons: list) -> str:
     return "\n".join(lines)
 
 
+def _format_group_options(limit: int = 24) -> str:
+    groups = get_latest_groups()
+    if not groups:
+        return "Список групп пока недоступен: нужно загрузить и распарсить расписание."
+    shown = ", ".join(groups[:limit])
+    suffix = "" if len(groups) <= limit else f" и еще {len(groups) - limit}"
+    return f"Доступные группы: {shown}{suffix}"
+
+
+def _set_group_from_text(update: Update, context: CallbackContext, raw_group: str) -> None:
+    group_query = (raw_group or "").strip().upper()
+    if not group_query:
+        update.message.reply_text("Напишите группу, например: 1И25Б")
+        return
+
+    groups = get_latest_groups()
+    matched = None
+    for group_code in groups:
+        if group_code.upper() == group_query:
+            matched = group_code
+            break
+    if matched is None:
+        for group_code in groups:
+            if group_query in group_code.upper():
+                matched = group_code
+                break
+    if matched is None and groups:
+        update.message.reply_text(
+            f"Не нашел группу «{group_query}» в последнем расписании.\n\n{_format_group_options()}"
+        )
+        return
+
+    set_subscriber_group(update.effective_chat.id, matched or group_query)
+    context.user_data.pop("awaiting_group", None)
+    update.message.reply_text(
+        f"Группа сохранена: {matched or group_query}\nТеперь кнопки «Сегодня» и «Завтра» будут сначала показывать ваше расписание по группе.",
+        reply_markup=_schedule_date_keyboard(),
+    )
+
+
+def _send_group_prompt(update: Update, context: CallbackContext) -> None:
+    settings = get_subscriber_settings(update.effective_chat.id)
+    current = settings.get("group_code") or "не выбрана"
+    context.user_data["awaiting_group"] = True
+    update.message.reply_text(
+        f"Текущая группа: {current}\n\nНапишите новую группу одним сообщением, например: 1И25Б.\n\n{_format_group_options()}",
+        reply_markup=_schedule_date_keyboard(),
+    )
+
+
+def _send_settings(update: Update, context: CallbackContext) -> None:
+    settings = get_subscriber_settings(update.effective_chat.id)
+    group_code = settings.get("group_code") or "не выбрана"
+    notify = "включены" if settings.get("notifications_enabled", True) else "выключены"
+    update.message.reply_text(
+        "⚙️ Настройки\n\n"
+        f"Группа: {group_code}\n"
+        f"Уведомления: {notify}\n\n"
+        "Команды:\n"
+        "/group — сменить группу\n"
+        "/notify_on — включить уведомления\n"
+        "/notify_off — выключить уведомления",
+        reply_markup=_schedule_date_keyboard(),
+    )
+
+
+def _send_user_schedule_for(update: Update, context: CallbackContext, target_date: date) -> None:
+    settings = get_subscriber_settings(update.effective_chat.id)
+    group_code = settings.get("group_code")
+    if group_code:
+        result = get_lessons_by_group(target_date, group_code)
+        if result:
+            actual_group, lessons = result
+            header = f"📅 {target_date.strftime('%d.%m.%Y')}\n"
+            update.message.reply_text(header + _format_lessons_text(actual_group, lessons))
+            return
+        update.message.reply_text(
+            f"Не нашел группу {group_code} в расписании на {target_date.strftime('%d.%m.%Y')}.\n"
+            "Возможно, группа переименована. Нажмите «Моя группа» или используйте /group, чтобы сменить ее."
+        )
+    _send_schedule_for(update, context, target_date)
+
+
 def _send_schedule_for(update: Update, context: CallbackContext, target_date: date) -> None:
     file_path = get_schedule(target_date)
     if not file_path:
@@ -336,12 +445,45 @@ def help_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(text)
 
 
+def group_command(update: Update, context: CallbackContext) -> None:
+    if not _require_channel(update, context):
+        return
+    add_subscriber(update.effective_chat.id)
+    update_subscriber_activity(update.effective_chat.id)
+    if context.args:
+        _set_group_from_text(update, context, " ".join(context.args))
+        return
+    _send_group_prompt(update, context)
+
+
+def settings_command(update: Update, context: CallbackContext) -> None:
+    if not _require_channel(update, context):
+        return
+    add_subscriber(update.effective_chat.id)
+    update_subscriber_activity(update.effective_chat.id)
+    _send_settings(update, context)
+
+
+def notify_on_command(update: Update, context: CallbackContext) -> None:
+    if not _require_channel(update, context):
+        return
+    set_notifications_enabled(update.effective_chat.id, True)
+    update.message.reply_text("Уведомления включены.", reply_markup=_schedule_date_keyboard())
+
+
+def notify_off_command(update: Update, context: CallbackContext) -> None:
+    if not _require_channel(update, context):
+        return
+    set_notifications_enabled(update.effective_chat.id, False)
+    update.message.reply_text("Уведомления выключены. Расписание по кнопкам останется доступным.", reply_markup=_schedule_date_keyboard())
+
+
 def today(update: Update, context: CallbackContext) -> None:
     if not _require_channel(update, context):
         return
     update_subscriber_activity(update.effective_chat.id)
     target = _today()
-    _send_schedule_for(update, context, target)
+    _send_user_schedule_for(update, context, target)
 
 
 def tomorrow(update: Update, context: CallbackContext) -> None:
@@ -349,7 +491,7 @@ def tomorrow(update: Update, context: CallbackContext) -> None:
         return
     update_subscriber_activity(update.effective_chat.id)
     target = _next_school_day(_today())
-    _send_schedule_for(update, context, target)
+    _send_user_schedule_for(update, context, target)
 
 
 def yesterday(update: Update, context: CallbackContext) -> None:
@@ -357,7 +499,7 @@ def yesterday(update: Update, context: CallbackContext) -> None:
         return
     update_subscriber_activity(update.effective_chat.id)
     target = _today() - timedelta(days=1)
-    _send_schedule_for(update, context, target)
+    _send_user_schedule_for(update, context, target)
 
 
 def date_command(update: Update, context: CallbackContext) -> None:
@@ -375,7 +517,7 @@ def date_command(update: Update, context: CallbackContext) -> None:
     except Exception:
         update.message.reply_text("⚠️ Некорректная дата. Формат: /date дд.мм")
         return
-    _send_schedule_for(update, context, target)
+    _send_user_schedule_for(update, context, target)
 
 
 def list_command(update: Update, context: CallbackContext) -> None:
@@ -527,6 +669,18 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
     text = (update.message.text or "").strip()
     text_lower = text.lower()
 
+    if context.user_data.get("awaiting_group"):
+        _set_group_from_text(update, context, text)
+        return
+
+    if "моя группа" in text_lower:
+        _send_group_prompt(update, context)
+        return
+
+    if "настройки" in text_lower:
+        _send_settings(update, context)
+        return
+
     # Пользователь в режиме «пишет вопрос» — сохраняем как обращение и уведомляем админов
     if context.user_data.get("awaiting_question"):
         context.user_data.pop("awaiting_question", None)
@@ -548,7 +702,7 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
     # Кнопки даты: Сегодня, Завтра, Понедельник, Послезавтра — полное расписание PDF
     target_date = _date_from_button(text)
     if target_date is not None:
-        _send_schedule_for(update, context, target_date)
+        _send_user_schedule_for(update, context, target_date)
         return
 
     # Поиск по группе в распарсенном расписании (если текст похож на код группы)
@@ -831,6 +985,7 @@ def main() -> None:
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Fill it in .env before starting the bot.")
 
+    _acquire_single_instance_lock()
     init_db()
     ensure_schedules_parsed()
 
@@ -840,6 +995,10 @@ def main() -> None:
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(CommandHandler("group", group_command))
+    dp.add_handler(CommandHandler("settings", settings_command))
+    dp.add_handler(CommandHandler("notify_on", notify_on_command))
+    dp.add_handler(CommandHandler("notify_off", notify_off_command))
     dp.add_handler(CommandHandler("today", today))
     dp.add_handler(CommandHandler("tomorrow", tomorrow))
     dp.add_handler(CommandHandler("yesterday", yesterday))

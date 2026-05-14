@@ -63,6 +63,16 @@ def init_db() -> None:
             cur.execute("ALTER TABLE subscribers ADD COLUMN last_activity DATETIME")
         except sqlite3.OperationalError:
             pass
+        for sql in (
+            "ALTER TABLE subscribers ADD COLUMN group_code TEXT",
+            "ALTER TABLE subscribers ADD COLUMN notifications_enabled INTEGER NOT NULL DEFAULT 1",
+            "ALTER TABLE subscribers ADD COLUMN group_missing_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE subscribers ADD COLUMN settings_updated_at DATETIME",
+        ):
+            try:
+                cur.execute(sql)
+            except sqlite3.OperationalError:
+                pass
 
         cur.execute(
             """
@@ -120,6 +130,41 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS processed_emails (
                 message_id TEXT PRIMARY KEY,
                 processed_at DATETIME NOT NULL
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS processed_updates (
+                chat_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                processed_at DATETIME NOT NULL,
+                PRIMARY KEY (chat_id, message_id)
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscriber_group_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                old_group_code TEXT,
+                new_group_code TEXT,
+                changed_at DATETIME NOT NULL
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sent_schedule_notifications (
+                chat_id INTEGER NOT NULL,
+                schedule_date DATE NOT NULL,
+                kind TEXT NOT NULL,
+                sent_at DATETIME NOT NULL,
+                PRIMARY KEY (chat_id, schedule_date, kind)
             )
             """
         )
@@ -187,6 +232,92 @@ def get_subscribers() -> List[int]:
     with _get_conn() as conn:
         rows = conn.cursor().execute("SELECT chat_id FROM subscribers").fetchall()
         return [int(row["chat_id"]) for row in rows]
+
+
+def get_subscribers_with_settings() -> List[dict]:
+    with _get_conn() as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT chat_id, group_code, notifications_enabled, group_missing_count
+            FROM subscribers
+            """
+        ).fetchall()
+        return [
+            {
+                "chat_id": int(row["chat_id"]),
+                "group_code": row["group_code"],
+                "notifications_enabled": bool(row["notifications_enabled"]),
+                "group_missing_count": int(row["group_missing_count"] or 0),
+            }
+            for row in rows
+        ]
+
+
+def get_subscriber_settings(chat_id: int) -> dict:
+    with _get_conn() as conn:
+        row = conn.cursor().execute(
+            """
+            SELECT chat_id, group_code, notifications_enabled, group_missing_count
+            FROM subscribers WHERE chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchone()
+        if not row:
+            return {
+                "chat_id": chat_id,
+                "group_code": None,
+                "notifications_enabled": True,
+                "group_missing_count": 0,
+            }
+        return {
+            "chat_id": int(row["chat_id"]),
+            "group_code": row["group_code"],
+            "notifications_enabled": bool(row["notifications_enabled"]),
+            "group_missing_count": int(row["group_missing_count"] or 0),
+        }
+
+
+def set_subscriber_group(chat_id: int, group_code: Optional[str]) -> None:
+    add_subscriber(chat_id)
+    new_group = group_code.strip().upper() if group_code and group_code.strip() else None
+    now = datetime.utcnow().isoformat()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            "SELECT group_code FROM subscribers WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        old_group = row["group_code"] if row else None
+        cur.execute(
+            """
+            UPDATE subscribers
+            SET group_code = ?, group_missing_count = 0, settings_updated_at = ?
+            WHERE chat_id = ?
+            """,
+            (new_group, now, chat_id),
+        )
+        if old_group != new_group:
+            cur.execute(
+                """
+                INSERT INTO subscriber_group_history
+                (chat_id, old_group_code, new_group_code, changed_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (chat_id, old_group, new_group, now),
+            )
+
+
+def set_notifications_enabled(chat_id: int, enabled: bool) -> None:
+    add_subscriber(chat_id)
+    with _get_conn() as conn:
+        conn.cursor().execute(
+            """
+            UPDATE subscribers
+            SET notifications_enabled = ?, settings_updated_at = ?
+            WHERE chat_id = ?
+            """,
+            (1 if enabled else 0, datetime.utcnow().isoformat(), chat_id),
+        )
 
 
 def get_subscriber_count() -> int:
@@ -388,6 +519,27 @@ def get_available_dates_with_lessons() -> List[date]:
         return [date.fromisoformat(r["schedule_date"]) for r in rows]
 
 
+def get_groups_for_date(schedule_date: date) -> List[str]:
+    with _get_conn() as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT DISTINCT group_code
+            FROM schedule_lessons
+            WHERE schedule_date = ?
+            ORDER BY group_code
+            """,
+            (schedule_date.isoformat(),),
+        ).fetchall()
+        return [row["group_code"] for row in rows]
+
+
+def get_latest_groups() -> List[str]:
+    dates = get_available_dates_with_lessons()
+    if not dates:
+        return []
+    return get_groups_for_date(dates[0])
+
+
 def find_teachers_by_name(query: str) -> List[dict]:
     """Поиск преподавателей по фамилии (или части имени). Регистронезависимый."""
     if not query or not query.strip():
@@ -430,5 +582,70 @@ def mark_email_processed(message_id: str) -> None:
         conn.cursor().execute(
             "INSERT OR IGNORE INTO processed_emails (message_id, processed_at) VALUES (?, ?)",
             (message_id, datetime.utcnow().isoformat()),
+        )
+
+
+def mark_update_processed(chat_id: int, message_id: int) -> bool:
+    """Return True when the update is new, False when it was already processed."""
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO processed_updates (chat_id, message_id, processed_at)
+            VALUES (?, ?, ?)
+            """,
+            (chat_id, message_id, datetime.utcnow().isoformat()),
+        )
+        return cur.rowcount > 0
+
+
+def was_schedule_notification_sent(chat_id: int, schedule_date: date, kind: str) -> bool:
+    with _get_conn() as conn:
+        row = conn.cursor().execute(
+            """
+            SELECT 1 FROM sent_schedule_notifications
+            WHERE chat_id = ? AND schedule_date = ? AND kind = ?
+            """,
+            (chat_id, schedule_date.isoformat(), kind),
+        ).fetchone()
+        return row is not None
+
+
+def mark_schedule_notification_sent(chat_id: int, schedule_date: date, kind: str) -> None:
+    with _get_conn() as conn:
+        conn.cursor().execute(
+            """
+            INSERT OR IGNORE INTO sent_schedule_notifications
+            (chat_id, schedule_date, kind, sent_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (chat_id, schedule_date.isoformat(), kind, datetime.utcnow().isoformat()),
+        )
+
+
+def bump_group_missing_count(chat_id: int) -> int:
+    add_subscriber(chat_id)
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE subscribers
+            SET group_missing_count = COALESCE(group_missing_count, 0) + 1
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        )
+        row = cur.execute(
+            "SELECT group_missing_count FROM subscribers WHERE chat_id = ?",
+            (chat_id,),
+        ).fetchone()
+        return int(row["group_missing_count"] or 0) if row else 0
+
+
+def reset_group_missing_count(chat_id: int) -> None:
+    with _get_conn() as conn:
+        conn.cursor().execute(
+            "UPDATE subscribers SET group_missing_count = 0 WHERE chat_id = ?",
+            (chat_id,),
         )
 
