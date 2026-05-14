@@ -748,6 +748,40 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
     text = (update.message.text or "").strip()
     text_lower = text.lower()
 
+    if "\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438" in text_lower:
+        context.user_data.pop("awaiting_group", None)
+        context.user_data.pop("awaiting_teacher", None)
+        context.user_data.pop("awaiting_question", None)
+        _send_settings(update, context)
+        return
+
+    if "\u043c\u043e\u044f \u0433\u0440\u0443\u043f\u043f\u0430" in text_lower:
+        context.user_data.pop("awaiting_teacher", None)
+        context.user_data.pop("awaiting_question", None)
+        _send_group_prompt(update, context)
+        return
+
+    if "\u043c\u043e\u0439 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c" in text_lower or text_lower in ("teacher", "\u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c"):
+        context.user_data.pop("awaiting_group", None)
+        context.user_data.pop("awaiting_question", None)
+        _send_teacher_prompt(update, context)
+        return
+
+    if "\u0437\u0430\u0434\u0430\u0442\u044c \u0432\u043e\u043f\u0440\u043e\u0441" in text_lower:
+        context.user_data.pop("awaiting_group", None)
+        context.user_data.pop("awaiting_teacher", None)
+        context.user_data["awaiting_question"] = True
+        update.message.reply_text("Напишите ваш вопрос - мы ответим вам здесь в боте.")
+        return
+
+    target_date = _date_from_button(text)
+    if target_date is not None:
+        context.user_data.pop("awaiting_group", None)
+        context.user_data.pop("awaiting_teacher", None)
+        context.user_data.pop("awaiting_question", None)
+        _send_user_schedule_for(update, context, target_date)
+        return
+
     if context.user_data.get("awaiting_group"):
         _set_group_from_text(update, context, text)
         return
