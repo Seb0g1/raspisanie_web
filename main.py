@@ -2,10 +2,12 @@ import logging
 import os
 import re
 import signal
-from datetime import datetime, timedelta, date, time as dtime, timezone
+from datetime import datetime, timedelta, date, time as dtime
 from typing import Optional
 
-MSK = timezone(timedelta(hours=3))
+import pytz
+
+MSK = pytz.timezone("Europe/Moscow")
 
 try:
     from dotenv import load_dotenv
