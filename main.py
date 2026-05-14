@@ -2,7 +2,9 @@ import logging
 import os
 import re
 import signal
+from collections import OrderedDict
 from datetime import datetime, timedelta, date, time as dtime
+from time import monotonic
 from typing import Optional
 
 import pytz
@@ -63,9 +65,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_RECENT_MESSAGES = OrderedDict()
+_RECENT_MESSAGES_TTL = 120
+_RECENT_MESSAGES_LIMIT = 1000
+
 
 def _today() -> date:
     return datetime.now(MSK).date()
+
+
+def _is_duplicate_message(update: Update) -> bool:
+    message = update.effective_message
+    chat = update.effective_chat
+    if not message or not chat:
+        return False
+
+    now = monotonic()
+    while _RECENT_MESSAGES:
+        _, seen_at = next(iter(_RECENT_MESSAGES.items()))
+        if now - seen_at <= _RECENT_MESSAGES_TTL:
+            break
+        _RECENT_MESSAGES.popitem(last=False)
+
+    key = (chat.id, message.message_id)
+    if key in _RECENT_MESSAGES:
+        logger.info("Skip duplicate message chat_id=%s message_id=%s", chat.id, message.message_id)
+        return True
+
+    _RECENT_MESSAGES[key] = now
+    if len(_RECENT_MESSAGES) > _RECENT_MESSAGES_LIMIT:
+        _RECENT_MESSAGES.popitem(last=False)
+    return False
 
 
 def _next_school_day(d: date) -> date:
@@ -488,6 +518,8 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
     Обработчик кнопок: дата (Сегодня/Завтра/Понедельник), Задать вопрос, текст (фамилия).
     """
     if not update.message:
+        return
+    if _is_duplicate_message(update):
         return
     if not _require_channel(update, context):
         return
