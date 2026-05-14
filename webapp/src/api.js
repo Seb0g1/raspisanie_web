@@ -28,6 +28,7 @@ export const api = {
   uploadSchedule: (formData) => request('/upload-schedule', { method: 'POST', body: formData }),
   schedules: () => request('/schedules'),
   mailScan: () => request('/mail/scan'),
+  mailEvents: () => request('/mail/events'),
   mailProcess: (msg_id, notify) => request('/mail/process', { method: 'POST', body: JSON.stringify({ msg_id, notify }) }),
   sendAd: (formData) => request('/ads/send', { method: 'POST', body: formData }),
 }

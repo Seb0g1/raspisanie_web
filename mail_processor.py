@@ -30,6 +30,7 @@ from config import (
     ALLOWED_SENDER,
     INCOMING_DIR,
     ARCHIVE_DIR,
+    ADMIN_CHAT_IDS,
 )
 from storage import (
     save_schedule,
@@ -44,6 +45,7 @@ from storage import (
     mark_schedule_notification_sent,
     bump_group_missing_count,
     reset_group_missing_count,
+    add_mail_event,
 )
 
 
@@ -228,7 +230,9 @@ def _connect_imap() -> Optional[imaplib.IMAP4_SSL]:
         if not value
     ]
     if missing:
-        logger.warning("IMAP is not configured, missing: %s", ", ".join(missing))
+        detail = "IMAP is not configured, missing: " + ", ".join(missing)
+        logger.warning(detail)
+        add_mail_event("warning", "imap_config", detail)
         return None
 
     try:
@@ -238,7 +242,9 @@ def _connect_imap() -> Optional[imaplib.IMAP4_SSL]:
         imap.login(IMAP_EMAIL, IMAP_PASSWORD)
         return imap
     except Exception as e:
-        logger.warning("IMAP connect error: %s", e)
+        detail = f"IMAP connect error: {e}"
+        logger.warning(detail)
+        add_mail_event("error", "imap_connect", detail)
         return None
 
 
@@ -253,6 +259,17 @@ def _iter_word_attachments(msg: Message):
         lower = decoded_name.lower()
         if lower.endswith(".doc") or lower.endswith(".docx"):
             yield decoded_name, part
+
+
+def _alert_admins(bot: Optional[Bot], title: str, detail: str) -> None:
+    if not bot or not ADMIN_CHAT_IDS:
+        return
+    text = f"⚠️ {title}\n\n{detail}"
+    for admin_id in ADMIN_CHAT_IDS:
+        try:
+            bot.send_message(chat_id=admin_id, text=text[:3500])
+        except Exception as e:
+            logger.warning("Admin alert to %s failed: %s", admin_id, e)
 
 
 def process_mail(bot: Bot) -> None:
@@ -275,6 +292,7 @@ def process_mail(bot: Bot) -> None:
         status, data = imap.search(None, search_criteria)
         if status != "OK":
             logger.warning("IMAP search failed")
+            add_mail_event("error", "imap_search", "IMAP search failed")
             return
 
         message_ids = data[0].split()
@@ -346,13 +364,42 @@ def process_mail(bot: Bot) -> None:
                             logger.info("Parsed %d groups for %s", len(groups_lessons), parsed_date)
                     except Exception as e:
                         logger.warning("Parse schedule error: %s", e)
+                        add_mail_event(
+                            "warning",
+                            "parse_schedule",
+                            str(e),
+                            message_id=email_message_id,
+                            subject=subject,
+                            schedule_date=schedule_date,
+                        )
                     if not had_schedule:
                         notify_new_schedule(bot, schedule_date, pdf_path)
                     else:
                         notify_updated_schedule(bot, schedule_date, pdf_path)
+                    add_mail_event(
+                        "info",
+                        "schedule_processed",
+                        f"{'new' if not had_schedule else 'updated'} schedule saved: {pdf_path}",
+                        message_id=email_message_id,
+                        subject=subject,
+                        schedule_date=schedule_date,
+                    )
 
                 except Exception as e:
                     logger.warning("Error processing attachment %s: %s", filename, e)
+                    _alert_admins(
+                        bot,
+                        "Ошибка обработки расписания",
+                        f"Письмо: {subject or email_message_id}\nФайл: {filename}\nОшибка: {e}",
+                    )
+                    add_mail_event(
+                        "error",
+                        "attachment_process",
+                        f"{filename}: {e}",
+                        message_id=email_message_id,
+                        subject=subject,
+                        schedule_date=schedule_date,
+                    )
                 finally:
                     try:
                         if os.path.exists(tmp_word_path):
@@ -364,6 +411,14 @@ def process_mail(bot: Bot) -> None:
             mark_email_processed(email_message_id)
             if not attachments_found:
                 logger.info("No Word attachments in email %s, marked as processed", email_message_id)
+                add_mail_event(
+                    "info",
+                    "no_word_attachments",
+                    "No Word attachments in email, marked as processed",
+                    message_id=email_message_id,
+                    subject=subject,
+                    schedule_date=schedule_date,
+                )
 
     finally:
         try:

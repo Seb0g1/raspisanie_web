@@ -169,6 +169,24 @@ def init_db() -> None:
             """
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS mail_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                level TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                message_id TEXT,
+                subject TEXT,
+                schedule_date DATE,
+                detail TEXT NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_mail_events_created ON mail_events(created_at)"
+        )
+
 
 def save_schedule(schedule_date: date, file_path: str, email_date: datetime) -> None:
     with _get_conn() as conn:
@@ -648,4 +666,58 @@ def reset_group_missing_count(chat_id: int) -> None:
             "UPDATE subscribers SET group_missing_count = 0 WHERE chat_id = ?",
             (chat_id,),
         )
+
+
+def add_mail_event(
+    level: str,
+    event_type: str,
+    detail: str,
+    message_id: Optional[str] = None,
+    subject: Optional[str] = None,
+    schedule_date: Optional[date] = None,
+) -> None:
+    with _get_conn() as conn:
+        conn.cursor().execute(
+            """
+            INSERT INTO mail_events
+            (level, event_type, message_id, subject, schedule_date, detail, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                level,
+                event_type,
+                message_id,
+                subject,
+                schedule_date.isoformat() if schedule_date else None,
+                detail,
+                datetime.utcnow().isoformat(),
+            ),
+        )
+
+
+def list_mail_events(limit: int = 50) -> List[dict]:
+    limit = max(1, min(int(limit or 50), 200))
+    with _get_conn() as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT id, level, event_type, message_id, subject, schedule_date, detail, created_at
+            FROM mail_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "level": row["level"],
+                "event_type": row["event_type"],
+                "message_id": row["message_id"],
+                "subject": row["subject"],
+                "schedule_date": row["schedule_date"],
+                "detail": row["detail"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
 

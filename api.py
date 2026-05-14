@@ -42,6 +42,7 @@ from storage import (
     get_subscribers,
     get_feedback_list,
     set_feedback_replied,
+    list_mail_events,
     remove_subscriber,
 )
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -322,6 +323,16 @@ def api_mail_process():
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/mail/events")
+@login_required
+def api_mail_events():
+    try:
+        limit = int(request.args.get("limit", "50"))
+    except ValueError:
+        limit = 50
+    return jsonify({"items": list_mail_events(limit)})
 
 
 @app.route("/api/upload-schedule", methods=["POST"])
