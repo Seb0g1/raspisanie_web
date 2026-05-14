@@ -668,6 +668,87 @@ def reset_group_missing_count(chat_id: int) -> None:
         )
 
 
+def list_subscribers(limit: int = 500, offset: int = 0, group_code: Optional[str] = None) -> List[dict]:
+    limit = max(1, min(int(limit or 500), 1000))
+    offset = max(0, int(offset or 0))
+    params = []
+    where = ""
+    if group_code:
+        where = "WHERE group_code = ?"
+        params.append(group_code)
+    with _get_conn() as conn:
+        rows = conn.cursor().execute(
+            f"""
+            SELECT chat_id, first_seen, last_activity, group_code, notifications_enabled,
+                   group_missing_count, settings_updated_at
+            FROM subscribers
+            {where}
+            ORDER BY COALESCE(last_activity, first_seen) DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, limit, offset),
+        ).fetchall()
+        return [
+            {
+                "chat_id": row["chat_id"],
+                "first_seen": row["first_seen"],
+                "last_activity": row["last_activity"],
+                "group_code": row["group_code"],
+                "notifications_enabled": bool(row["notifications_enabled"]),
+                "group_missing_count": int(row["group_missing_count"] or 0),
+                "settings_updated_at": row["settings_updated_at"],
+            }
+            for row in rows
+        ]
+
+
+def get_group_stats() -> List[dict]:
+    active_since = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    with _get_conn() as conn:
+        rows = conn.cursor().execute(
+            """
+            SELECT
+                COALESCE(NULLIF(group_code, ''), 'Без группы') AS group_code,
+                COUNT(*) AS users_count,
+                SUM(CASE WHEN notifications_enabled = 1 THEN 1 ELSE 0 END) AS notifications_enabled_count,
+                SUM(CASE WHEN COALESCE(last_activity, first_seen) >= ? THEN 1 ELSE 0 END) AS active_7_count,
+                SUM(CASE WHEN group_missing_count > 0 THEN 1 ELSE 0 END) AS missing_count
+            FROM subscribers
+            GROUP BY COALESCE(NULLIF(group_code, ''), 'Без группы')
+            ORDER BY users_count DESC, group_code ASC
+            """,
+            (active_since,),
+        ).fetchall()
+        return [
+            {
+                "group_code": row["group_code"],
+                "users_count": int(row["users_count"] or 0),
+                "notifications_enabled_count": int(row["notifications_enabled_count"] or 0),
+                "active_7_count": int(row["active_7_count"] or 0),
+                "missing_count": int(row["missing_count"] or 0),
+            }
+            for row in rows
+        ]
+
+
+def cleanup_technical_data(days: int = 90) -> dict:
+    days = max(7, int(days or 90))
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+    targets = [
+        ("processed_updates", "processed_at"),
+        ("mail_events", "created_at"),
+        ("sent_schedule_notifications", "sent_at"),
+        ("subscriber_group_history", "changed_at"),
+    ]
+    deleted = {}
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        for table, column in targets:
+            cur.execute(f"DELETE FROM {table} WHERE {column} < ?", (cutoff,))
+            deleted[table] = cur.rowcount
+    return {"days": days, "cutoff": cutoff, "deleted": deleted}
+
+
 def add_mail_event(
     level: str,
     event_type: str,

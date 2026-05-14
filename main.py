@@ -329,7 +329,12 @@ def _send_user_schedule_for(update: Update, context: CallbackContext, target_dat
         if result:
             actual_group, lessons = result
             header = f"📅 {target_date.strftime('%d.%m.%Y')}\n"
-            update.message.reply_text(header + _format_lessons_text(actual_group, lessons))
+            update.message.reply_text(
+                header + _format_lessons_text(actual_group, lessons),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Полный PDF", callback_data=f"schedule_{target_date.isoformat()}")
+                ]]),
+            )
             return
         update.message.reply_text(
             f"Не нашел группу {group_code} в расписании на {target_date.strftime('%d.%m.%Y')}.\n"

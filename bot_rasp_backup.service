@@ -1,0 +1,8 @@
+[Unit]
+Description=Telegram Bot Raspisanie backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bot_rasp
+EnvironmentFile=/home/bot_rasp/.env
+ExecStart=/home/bot_rasp/scripts/backup.sh

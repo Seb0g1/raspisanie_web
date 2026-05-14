@@ -1,0 +1,8 @@
+[Unit]
+Description=Telegram Bot Raspisanie technical table cleanup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/bot_rasp
+EnvironmentFile=/home/bot_rasp/.env
+ExecStart=/home/bot_rasp/venv/bin/python scripts/cleanup.py --days 90

@@ -43,6 +43,9 @@ from storage import (
     get_feedback_list,
     set_feedback_replied,
     list_mail_events,
+    list_subscribers,
+    get_group_stats,
+    cleanup_technical_data,
     remove_subscriber,
 )
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
@@ -151,6 +154,22 @@ def api_stats():
         "new_7": new_7,
         "active_7": active_7,
         "schedules_count": len(schedules),
+    })
+
+
+@app.route("/api/users")
+@login_required
+def api_users():
+    try:
+        limit = int(request.args.get("limit", "500"))
+        offset = int(request.args.get("offset", "0"))
+    except ValueError:
+        limit = 500
+        offset = 0
+    group_code = (request.args.get("group") or "").strip() or None
+    return jsonify({
+        "items": list_subscribers(limit=limit, offset=offset, group_code=group_code),
+        "group_stats": get_group_stats(),
     })
 
 
@@ -333,6 +352,17 @@ def api_mail_events():
     except ValueError:
         limit = 50
     return jsonify({"items": list_mail_events(limit)})
+
+
+@app.route("/api/maintenance/cleanup", methods=["POST"])
+@login_required
+def api_maintenance_cleanup():
+    data = request.get_json(silent=True) or {}
+    try:
+        days = int(data.get("days", 90))
+    except (TypeError, ValueError):
+        days = 90
+    return jsonify({"ok": True, **cleanup_technical_data(days)})
 
 
 @app.route("/api/upload-schedule", methods=["POST"])

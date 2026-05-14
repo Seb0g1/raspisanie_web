@@ -4,6 +4,7 @@
       <router-link to="/" class="logo">Расписание</router-link>
       <nav class="nav">
         <router-link to="/">Главная</router-link>
+        <router-link to="/users">Пользователи</router-link>
         <router-link to="/broadcast">Рассылка</router-link>
         <router-link to="/feedback">Обратная связь</router-link>
         <router-link to="/upload">Загрузить</router-link>
@@ -69,6 +70,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   padding: 1rem 1.5rem;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
@@ -80,12 +82,14 @@ body {
   font-size: 1.25rem;
   color: var(--accent);
   text-decoration: none;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 .nav {
   display: flex;
   align-items: center;
-  gap: 1.5rem;
+  justify-content: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 .nav a {
   color: var(--text-muted);
@@ -109,11 +113,17 @@ body {
 .main {
   flex: 1;
   padding: 1.5rem;
-  max-width: 900px;
+  max-width: 1120px;
   margin: 0 auto;
   width: 100%;
 }
 .main--full { max-width: 440px; padding-top: 3rem; }
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+@media (max-width: 760px) {
+  .header { align-items: flex-start; flex-direction: column; }
+  .nav { justify-content: flex-start; gap: 0.75rem; }
+  .main { padding: 1rem; }
+}
 </style>

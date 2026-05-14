@@ -20,6 +20,8 @@ export const api = {
   login: (password) => request('/login', { method: 'POST', body: JSON.stringify({ password }) }),
   logout: () => request('/logout', { method: 'POST' }),
   stats: () => request('/stats'),
+  users: () => request('/users'),
+  cleanup: (days = 90) => request('/maintenance/cleanup', { method: 'POST', body: JSON.stringify({ days }) }),
   broadcast: (message) => request('/broadcast', { method: 'POST', body: JSON.stringify({ message }) }),
   broadcastWithFiles: (formData) => request('/broadcast', { method: 'POST', body: formData }),
   feedback: () => request('/feedback'),

@@ -12,7 +12,7 @@ import subprocess
 import sys
 import re
 from dateutil import parser as date_parser
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 logger = logging.getLogger(__name__)
 
@@ -248,7 +248,7 @@ def _connect_imap() -> Optional[imaplib.IMAP4_SSL]:
         return None
 
 
-def _iter_word_attachments(msg: Message):
+def _iter_schedule_attachments(msg: Message):
     for part in msg.walk():
         if part.get_content_maintype() == "multipart":
             continue
@@ -258,7 +258,47 @@ def _iter_word_attachments(msg: Message):
         decoded_name = _decode_header(filename)
         lower = decoded_name.lower()
         if lower.endswith(".doc") or lower.endswith(".docx"):
-            yield decoded_name, part
+            yield decoded_name, part, "word"
+        elif lower.endswith(".pdf"):
+            yield decoded_name, part, "pdf"
+
+
+def _schedule_pdf_path(schedule_date: date) -> str:
+    pdf_name = f"Р Р°СЃРїРёСЃР°РЅРёРµ_{schedule_date.isoformat()}.pdf"
+    year_dir = os.path.join(ARCHIVE_DIR, str(schedule_date.year))
+    month_dir = os.path.join(year_dir, f"{schedule_date.month:02d}")
+    os.makedirs(month_dir, exist_ok=True)
+    return os.path.join(month_dir, pdf_name)
+
+
+def _attachment_to_pdf(filename: str, part: Message, schedule_date: date) -> str:
+    file_bytes = part.get_payload(decode=True)
+    if not file_bytes:
+        raise ValueError("empty attachment")
+
+    pdf_path = _schedule_pdf_path(schedule_date)
+    if filename.lower().endswith(".pdf"):
+        with open(pdf_path, "wb") as f:
+            f.write(file_bytes)
+        logger.info("Saved PDF attachment %s -> %s", filename, pdf_path)
+        return pdf_path
+
+    base_name = os.path.splitext(os.path.basename(filename))[0]
+    tmp_word_path = os.path.join(
+        INCOMING_DIR,
+        f"{base_name}_{int(datetime.utcnow().timestamp())}.docx",
+    )
+    try:
+        with open(tmp_word_path, "wb") as f:
+            f.write(file_bytes)
+        logger.info("Converting %s -> %s", tmp_word_path, pdf_path)
+        return _convert_to_pdf(tmp_word_path, pdf_path)
+    finally:
+        try:
+            if os.path.exists(tmp_word_path):
+                os.remove(tmp_word_path)
+        except Exception:
+            pass
 
 
 def _alert_admins(bot: Optional[Bot], title: str, detail: str) -> None:
@@ -325,37 +365,13 @@ def process_mail(bot: Bot) -> None:
             schedule_date = _extract_schedule_date_from_subject(subject, email_date)
 
             attachments_found = False
-            for filename, part in _iter_word_attachments(msg):
+            for filename, part, attachment_type in _iter_schedule_attachments(msg):
                 attachments_found = True
                 try:
-                    file_bytes = part.get_payload(decode=True)
-                    if not file_bytes:
-                        continue
+                    pdf_path = _attachment_to_pdf(filename, part, schedule_date)
 
-                    # Сохраняем во временный Word-файл
-                    base_name = os.path.splitext(os.path.basename(filename))[0]
-                    tmp_word_path = os.path.join(
-                        INCOMING_DIR,
-                        f"{base_name}_{int(datetime.utcnow().timestamp())}.docx",
-                    )
-                    with open(tmp_word_path, "wb") as f:
-                        f.write(file_bytes)
-
-                    # Готовим путь для PDF
-                    pdf_name = f"Расписание_{schedule_date.isoformat()}.pdf"
-                    year_dir = os.path.join(ARCHIVE_DIR, str(schedule_date.year))
-                    month_dir = os.path.join(year_dir, f"{schedule_date.month:02d}")
-                    os.makedirs(month_dir, exist_ok=True)
-                    pdf_path = os.path.join(month_dir, pdf_name)
-
-                    # Конвертация Word -> PDF
-                    logger.info("Converting %s -> %s", tmp_word_path, pdf_path)
-                    pdf_path = _convert_to_pdf(tmp_word_path, pdf_path)
-
-                    # Уведомляем только если расписание новое (раньше не было)
                     had_schedule = get_schedule(schedule_date) is not None
                     save_schedule(schedule_date, pdf_path, email_date)
-                    # Парсим PDF для поиска по группе/преподавателю
                     try:
                         from schedule_parser import parse_schedule_pdf
                         parsed_date, groups_lessons = parse_schedule_pdf(pdf_path)
@@ -379,7 +395,7 @@ def process_mail(bot: Bot) -> None:
                     add_mail_event(
                         "info",
                         "schedule_processed",
-                        f"{'new' if not had_schedule else 'updated'} schedule saved: {pdf_path}",
+                        f"{'new' if not had_schedule else 'updated'} schedule saved from {attachment_type}: {pdf_path}",
                         message_id=email_message_id,
                         subject=subject,
                         schedule_date=schedule_date,
@@ -389,8 +405,8 @@ def process_mail(bot: Bot) -> None:
                     logger.warning("Error processing attachment %s: %s", filename, e)
                     _alert_admins(
                         bot,
-                        "Ошибка обработки расписания",
-                        f"Письмо: {subject or email_message_id}\nФайл: {filename}\nОшибка: {e}",
+                        "Schedule processing error",
+                        f"Email: {subject or email_message_id}\nFile: {filename}\nError: {e}",
                     )
                     add_mail_event(
                         "error",
@@ -400,21 +416,13 @@ def process_mail(bot: Bot) -> None:
                         subject=subject,
                         schedule_date=schedule_date,
                     )
-                finally:
-                    try:
-                        if os.path.exists(tmp_word_path):
-                            os.remove(tmp_word_path)
-                    except Exception:
-                        pass
-
-            # Помечаем письмо обработанным (даже без вложений, чтобы не проверять повторно)
             mark_email_processed(email_message_id)
             if not attachments_found:
-                logger.info("No Word attachments in email %s, marked as processed", email_message_id)
+                logger.info("No schedule attachments in email %s, marked as processed", email_message_id)
                 add_mail_event(
                     "info",
-                    "no_word_attachments",
-                    "No Word attachments in email, marked as processed",
+                    "no_schedule_attachments",
+                    "No Word or PDF attachments in email, marked as processed",
                     message_id=email_message_id,
                     subject=subject,
                     schedule_date=schedule_date,
@@ -465,7 +473,12 @@ def scan_mailbox() -> list:
                 if fname:
                     decoded = _decode_header(fname)
                     lower = decoded.lower()
-                    atype = "word" if lower.endswith((".doc", ".docx")) else "other"
+                    if lower.endswith((".doc", ".docx")):
+                        atype = "word"
+                    elif lower.endswith(".pdf"):
+                        atype = "pdf"
+                    else:
+                        atype = "other"
                     attachments.append({"name": decoded, "type": atype})
             already_loaded = get_schedule(schedule_date) is not None
             result.append({
@@ -477,6 +490,8 @@ def scan_mailbox() -> list:
                 "schedule_date_formatted": schedule_date.strftime("%d.%m.%Y"),
                 "attachments": attachments,
                 "has_word": any(a["type"] == "word" for a in attachments),
+                "has_pdf": any(a["type"] == "pdf" for a in attachments),
+                "has_schedule_file": any(a["type"] in ("word", "pdf") for a in attachments),
                 "already_loaded": already_loaded,
             })
     finally:
@@ -508,24 +523,9 @@ def process_single_mail(msg_id_str: str, bot: Optional[Bot] = None, notify: bool
         subject = _decode_header(msg.get("Subject", ""))
         schedule_date = _extract_schedule_date_from_subject(subject, email_date)
         processed = 0
-        for filename, part in _iter_word_attachments(msg):
-            file_bytes = part.get_payload(decode=True)
-            if not file_bytes:
-                continue
-            base_name = os.path.splitext(os.path.basename(filename))[0]
-            tmp_word_path = os.path.join(
-                INCOMING_DIR, f"{base_name}_{int(datetime.utcnow().timestamp())}.docx"
-            )
+        for filename, part, attachment_type in _iter_schedule_attachments(msg):
             try:
-                with open(tmp_word_path, "wb") as f:
-                    f.write(file_bytes)
-                pdf_name = f"Расписание_{schedule_date.isoformat()}.pdf"
-                year_dir = os.path.join(ARCHIVE_DIR, str(schedule_date.year))
-                month_dir = os.path.join(year_dir, f"{schedule_date.month:02d}")
-                os.makedirs(month_dir, exist_ok=True)
-                pdf_path = os.path.join(month_dir, pdf_name)
-                logger.info("Converting %s -> %s", tmp_word_path, pdf_path)
-                _convert_to_pdf(tmp_word_path, pdf_path)
+                pdf_path = _attachment_to_pdf(filename, part, schedule_date)
                 had_schedule = get_schedule(schedule_date) is not None
                 save_schedule(schedule_date, pdf_path, email_date)
                 try:
@@ -535,15 +535,15 @@ def process_single_mail(msg_id_str: str, bot: Optional[Bot] = None, notify: bool
                         save_parsed_lessons(parsed_date, groups_lessons)
                 except Exception as e:
                     logger.warning("Parse error: %s", e)
-                if notify and bot and not had_schedule:
-                    notify_new_schedule(bot, schedule_date, pdf_path)
+                if notify and bot:
+                    if not had_schedule:
+                        notify_new_schedule(bot, schedule_date, pdf_path)
+                    else:
+                        notify_updated_schedule(bot, schedule_date, pdf_path)
                 processed += 1
-            finally:
-                try:
-                    if os.path.exists(tmp_word_path):
-                        os.remove(tmp_word_path)
-                except Exception:
-                    pass
+            except Exception as e:
+                logger.warning("Error processing attachment %s: %s", filename, e)
+                raise
         return {
             "ok": True,
             "schedule_date": schedule_date.isoformat(),
@@ -607,7 +607,13 @@ def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, capt
                             f"{les['discipline']}\n"
                             f"{les['teacher']}"
                         )
-                    bot.send_message(chat_id=chat_id, text="\n\n".join(lines))
+                    bot.send_message(
+                        chat_id=chat_id,
+                        text="\n\n".join(lines),
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("Полный PDF", callback_data=f"schedule_{schedule_date.isoformat()}")
+                        ]]),
+                    )
                     mark_schedule_notification_sent(chat_id, schedule_date, kind)
                     continue
 

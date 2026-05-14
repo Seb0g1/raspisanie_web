@@ -4,6 +4,7 @@ import { api } from '../api'
 const routes = [
   { path: '/login', name: 'Login', component: () => import('../views/Login.vue'), meta: { public: true } },
   { path: '/', name: 'Dashboard', component: () => import('../views/Dashboard.vue') },
+  { path: '/users', name: 'Users', component: () => import('../views/Users.vue') },
   { path: '/broadcast', name: 'Broadcast', component: () => import('../views/Broadcast.vue') },
   { path: '/feedback', name: 'Feedback', component: () => import('../views/Feedback.vue') },
   { path: '/upload', name: 'Upload', component: () => import('../views/Upload.vue') },

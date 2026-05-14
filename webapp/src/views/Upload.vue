@@ -20,7 +20,7 @@
         <div class="email-header">
           <span class="email-date">{{ email.date }}</span>
           <span v-if="email.already_loaded" class="badge badge--loaded">Загружено</span>
-          <span v-else-if="email.has_word" class="badge badge--word">Word</span>
+          <span v-else-if="email.has_schedule_file" class="badge badge--word">{{ email.has_pdf ? 'PDF' : 'Word' }}</span>
         </div>
         <div class="email-subject">{{ email.subject || 'Без темы' }}</div>
         <div class="email-meta">
@@ -34,14 +34,14 @@
         </div>
         <div class="email-actions">
           <button
-            v-if="email.has_word"
+            v-if="email.has_schedule_file"
             class="btn btn--small"
             :disabled="processingId === email.msg_id"
             @click="processEmail(email)"
           >
             {{ processingId === email.msg_id ? 'Обработка...' : (email.already_loaded ? 'Обновить' : 'Конвертировать и загрузить') }}
           </button>
-          <label v-if="email.has_word" class="checkbox-label-small">
+          <label v-if="email.has_schedule_file" class="checkbox-label-small">
             <input type="checkbox" v-model="email._notify" />
             Уведомить
           </label>
