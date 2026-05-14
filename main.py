@@ -253,17 +253,19 @@ def _format_lessons_text(group_code: str, lessons: list) -> str:
 
 
 def _format_teacher_lessons_text(teacher_name: str, groups_lessons: list) -> str:
-    lines = [f"👤 {teacher_name}:"]
+    lines = [f"\U0001f464 {teacher_name}:"]
+    items = []
     for group_code, lessons in groups_lessons:
-        lines.append(f"📋 {group_code}")
         for les in lessons:
-            room_str = f" (каб. {les['room']})" if les.get("room") else ""
-            lines.append(
-                f"  {les['num']}. {les['time_start']}-{les['time_end']}{room_str}\n"
-                f"     {les['discipline']}"
-            )
+            items.append((int(les.get("num") or 999), les.get("time_start") or "", group_code, les))
+    items.sort(key=lambda item: (item[0], item[1], item[2]))
+    for _, _, group_code, les in items:
+        room_str = f" (\u043a\u0430\u0431. {les['room']})" if les.get("room") else ""
+        lines.append(
+            f"  {les['num']}. {les['time_start']}-{les['time_end']}{room_str} - {group_code}\n"
+            f"     {les['discipline']}"
+        )
     return "\n".join(lines)
-
 
 def _format_group_options(limit: int = 24) -> str:
     groups = get_latest_groups()
@@ -759,6 +761,10 @@ def text_buttons_handler(update: Update, context: CallbackContext) -> None:
         return
 
     if "\u043c\u043e\u0439 \u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c" in text_lower:
+        _send_teacher_prompt(update, context)
+        return
+
+    if text_lower in ("teacher", "\u043f\u0440\u0435\u043f\u043e\u0434\u0430\u0432\u0430\u0442\u0435\u043b\u044c"):
         _send_teacher_prompt(update, context)
         return
 

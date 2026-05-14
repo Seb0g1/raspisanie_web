@@ -585,17 +585,19 @@ def convert_uploaded_word(word_bytes: bytes, original_filename: str, schedule_da
 
 
 def _format_teacher_notification(schedule_date: date, teacher_name: str, groups_lessons: list) -> str:
-    lines = [f"📅 {schedule_date.strftime('%d.%m.%Y')}", f"👤 {teacher_name}:"]
+    lines = [f"\U0001f4c5 {schedule_date.strftime('%d.%m.%Y')}", f"\U0001f464 {teacher_name}:"]
+    items = []
     for group_code, lessons in groups_lessons:
-        lines.append(f"📋 {group_code}")
         for les in lessons:
-            room = f" (каб. {les['room']})" if les.get("room") else ""
-            lines.append(
-                f"{les['num']}. {les['time_start']}-{les['time_end']}{room}\n"
-                f"{les['discipline']}"
-            )
+            items.append((int(les.get("num") or 999), les.get("time_start") or "", group_code, les))
+    items.sort(key=lambda item: (item[0], item[1], item[2]))
+    for _, _, group_code, les in items:
+        room = f" (\u043a\u0430\u0431. {les['room']})" if les.get("room") else ""
+        lines.append(
+            f"{les['num']}. {les['time_start']}-{les['time_end']}{room} - {group_code}\n"
+            f"{les['discipline']}"
+        )
     return "\n\n".join(lines)
-
 
 def _notify_schedule_document(bot: Bot, schedule_date: date, pdf_path: str, caption: str) -> None:
     kind_base = "updated" if "ИЗМЕНЕНИЕ" in caption else "new"
